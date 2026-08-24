@@ -19,6 +19,7 @@ export interface EmitirVentaParams {
 export interface EmitirVentaResult {
   tipo: string
   numero: string
+  total: number
 }
 
 // Emite la venta actual del carrito: sincroniza pendientes offline si hace
@@ -82,7 +83,7 @@ export async function emitirVenta(params: EmitirVentaParams): Promise<EmitirVent
     store.limpiarCarrito()
     // ARCA caído: la factura se autoriza sola en segundo plano; mientras, no fiscal.
     if (data.data!.pendiente_cae) imprimirNoFiscalSnap()
-    return { tipo: 'Factura', numero: data.data!.pendiente_cae ? 'PENDIENTE' : data.data!.numero }
+    return { tipo: 'Factura', numero: data.data!.pendiente_cae ? 'PENDIENTE' : data.data!.numero, total: snapTotal }
   }
 
   if (!sync.online) {
@@ -97,7 +98,7 @@ export async function emitirVenta(params: EmitirVentaParams): Promise<EmitirVent
     })
     store.limpiarCarrito()
     imprimirNoFiscalSnap()
-    return { tipo: 'Ticket', numero: 'OFFLINE' }
+    return { tipo: 'Ticket', numero: 'OFFLINE', total: snapTotal }
   }
 
   const { data } = await ventasApi.crear({
@@ -112,7 +113,7 @@ export async function emitirVenta(params: EmitirVentaParams): Promise<EmitirVent
   store.limpiarCarrito()
   if (data.data.pendiente_cae) {
     imprimirNoFiscalSnap()
-    return { tipo: 'Ticket', numero: 'PENDIENTE' }
+    return { tipo: 'Ticket', numero: 'PENDIENTE', total: snapTotal }
   }
 
   if (printer.conectado) {
@@ -130,5 +131,5 @@ export async function emitirVenta(params: EmitirVentaParams): Promise<EmitirVent
       qrData: data.data.qr_data ?? '',
     })
   }
-  return { tipo: 'Ticket', numero: data.data.numero }
+  return { tipo: 'Ticket', numero: data.data.numero, total: snapTotal }
 }

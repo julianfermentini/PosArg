@@ -5,15 +5,16 @@ import { persist } from 'zustand/middleware'
 // así que hace falta poder agrandarla; el resto de las pantallas se usan
 // sentado y de cerca y conviene que sigan entrando enteras.
 //
-// OJO al agregar una escala más grande: los anchos mínimos de las tres
-// columnas de Caja (VentaPage) tienen que seguir entrando en la pantalla más
-// angosta que usa ese layout. Hoy son 240 + 280 + 260 = 780, y en 1024px al
-// 1.3 quedan 1024/1.3 = 787 disponibles. Con una escala mayor no entran y el
-// botón Emitir se recorta sin aviso.
+// Hubo una escala "Más grande" (1.3) que se sacó: en la tablet real el ancho
+// mínimo de las tres columnas de Caja (240 + 280 + 260 = 780) no entraba a
+// ese zoom y el layout se rompía (carrito con ítems, filas apretadas contra
+// los controles de cantidad). "Grande" sí entra, así que es el techo hasta
+// no achicar esos mínimos y confirmar en la tablet real: al agregar una
+// escala mayor, esos anchos mínimos de VentaPage tienen que seguir entrando
+// en la pantalla más angosta que usa ese layout.
 export const ESCALAS_CAJA = [
   { id: 'normal',     label: 'Normal',     valor: 1    },
   { id: 'grande',     label: 'Grande',     valor: 1.15 },
-  { id: 'mas-grande', label: 'Más grande', valor: 1.3  },
 ] as const
 
 export type EscalaCajaID = typeof ESCALAS_CAJA[number]['id']
@@ -25,7 +26,7 @@ export type EscalaCajaID = typeof ESCALAS_CAJA[number]['id']
 // Recibe string y no EscalaCajaID porque lo persistido no está validado: si el
 // localStorage quedó con un ID que ya no existe, cae a Normal. Tienen que
 // pasar por acá TANTO el zoom como el selector, o el zoom caería a Normal
-// mientras el selector muestra las tres opciones apagadas.
+// mientras el selector muestra sus opciones apagadas.
 export function escalaActiva(id: string) {
   return ESCALAS_CAJA.find(e => e.id === id) ?? ESCALAS_CAJA[0]
 }

@@ -8,7 +8,7 @@ import { useUIStore, escalaActiva } from '../stores/uiStore'
 import { ProductoPanel } from '../components/features/venta/ProductoPanel'
 import { CarritoPanel } from '../components/features/venta/CarritoPanel'
 import { CobroPanel } from '../components/features/venta/CobroPanel'
-import { emitirVenta } from '../lib/emitirVenta'
+import { emitirVenta, type EmitirVentaResult } from '../lib/emitirVenta'
 import { buildEmpresaBase, itemsParaTicket } from '../lib/printer'
 
 type Paso = 'descripcion' | 'precio'
@@ -25,7 +25,7 @@ export default function VentaPage() {
   const [mobileTab, setMobileTab] = useState<'agregar' | 'carrito' | 'cobrar'>('agregar')
   const [cargando, setCargando] = useState(false)
   const [errorMsg, setErrorMsg] = useState('')
-  const [emitido, setEmitido] = useState<{ tipo: string; numero: string } | null>(null)
+  const [emitido, setEmitido] = useState<EmitirVentaResult | null>(null)
 
   // Datos factura inline
   const [needsFactura, setNeedsFactura]     = useState(false)
@@ -45,6 +45,12 @@ export default function VentaPage() {
   const puedeEmitir = store.carrito.length > 0 && Math.abs(sumaPagos - store.getTotal()) < 0.005
 
   const handleProductoClick = useCallback((producto: Producto) => {
+    // El total emitido tiene que seguir a la vista mientras se cobra con
+    // tarjeta, así que no se autooculta por tiempo — se limpia recién acá,
+    // al arrancar la próxima venta. Es el único punto de entrada: paso solo
+    // llega a 'precio' pasando por acá, así que también cubre el flujo de
+    // precio libre (ver onConfirmarPrecio más abajo).
+    setEmitido(null)
     if (producto.precio !== null) {
       store.agregarItemDirecto(producto.nombre, producto.precio)
     } else {
@@ -53,7 +59,7 @@ export default function VentaPage() {
     }
   }, [store])
 
-  const mostrarExito = (tipo: string, numero: string) => {
+  const mostrarExito = (resultado: EmitirVentaResult) => {
     setPaso('descripcion')
     setNeedsFactura(false)
     setDividirPago(false)
@@ -61,8 +67,7 @@ export default function VentaPage() {
     setCuit('')
     setEmailCliente('')
     setErrorMsg('')
-    setEmitido({ tipo, numero })
-    setTimeout(() => setEmitido(null), 3500)
+    setEmitido(resultado)
   }
 
   const handleEmitir = async () => {
@@ -71,7 +76,7 @@ export default function VentaPage() {
     setErrorMsg('')
     try {
       const resultado = await emitirVenta({ store, sync, printer, empresa, needsFactura, razonSocial, cuit, emailCliente })
-      if (resultado) mostrarExito(resultado.tipo, resultado.numero)
+      if (resultado) mostrarExito(resultado)
     } catch (e: unknown) {
       setErrorMsg(e instanceof Error ? e.message : 'Error al emitir')
     } finally {

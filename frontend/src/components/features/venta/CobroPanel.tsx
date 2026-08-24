@@ -1,5 +1,6 @@
 import { DESCUENTOS } from '../../../stores/ventaStore'
 import { formatPrecio } from '../../../lib/utils'
+import type { EmitirVentaResult } from '../../../lib/emitirVenta'
 import { FormaPago, type FormaPagoProps } from './FormaPago'
 import { FacturaFields, type FacturaFieldsProps } from './FacturaFields'
 
@@ -20,7 +21,7 @@ interface CobroPanelProps {
   puedeEmitir: boolean
   cargando: boolean
   errorMsg: string
-  emitido: { tipo: string; numero: string } | null
+  emitido: EmitirVentaResult | null
   onEmitir: () => void
 
   printerConectado: boolean
@@ -119,22 +120,28 @@ export function CobroPanel({
 
       {/* ── Bottom: always visible ── */}
       <div style={{ flexShrink: 0, padding: '0 24px max(32px, env(safe-area-inset-bottom, 32px))', display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {/* Success toast */}
+        {/* Success toast — sin auto-ocultar, queda a la vista mientras se cobra
+            con tarjeta (se limpia al arrancar la próxima venta). */}
         {emitido && (
-          <div className="rounded-xl border flex flex-col" style={{
-            background: '#F0FDF4', borderColor: '#86EFAC', padding: '14px 16px', gap: 4,
+          <div className="rounded-xl border flex items-center justify-between" style={{
+            background: '#F0FDF4', borderColor: '#86EFAC', padding: '14px 16px', gap: 10,
             animation: 'fadeSlideIn 0.25s ease',
           }}>
-            <span className="font-bold" style={{ color: '#16A34A' }}>{emitido.tipo} emitido</span>
-            {emitido.numero === 'OFFLINE' ? (
-              <span style={{ fontSize: 12, color: '#D97706' }}>Guardado offline — se sincronizará</span>
-            ) : emitido.numero === 'PENDIENTE' ? (
-              <span style={{ fontSize: 12, color: '#D97706' }}>Cobrado — pendiente de CAE, se autoriza solo</span>
-            ) : (
-              <span className="font-mono text-gray-400" style={{ fontSize: 11 }}>
-                N° {emitido.numero} · CAE aprobado
-              </span>
-            )}
+            <div className="flex flex-col" style={{ gap: 4 }}>
+              <span className="font-bold" style={{ color: '#16A34A' }}>{emitido.tipo} emitido</span>
+              {emitido.numero === 'OFFLINE' ? (
+                <span style={{ fontSize: 12, color: '#D97706' }}>Guardado offline — se sincronizará</span>
+              ) : emitido.numero === 'PENDIENTE' ? (
+                <span style={{ fontSize: 12, color: '#D97706' }}>Cobrado — pendiente de CAE, se autoriza solo</span>
+              ) : (
+                <span className="font-mono text-gray-400" style={{ fontSize: 11 }}>
+                  N° {emitido.numero} · CAE aprobado
+                </span>
+              )}
+            </div>
+            <span className="font-mono font-black flex-shrink-0" style={{ fontSize: 22, color: '#16A34A' }}>
+              {formatPrecio(emitido.total)}
+            </span>
           </div>
         )}
 
