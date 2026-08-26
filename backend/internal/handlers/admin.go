@@ -40,7 +40,7 @@ func (h *AdminHandler) CrearCuenta(c *gin.Context) {
 		return
 	}
 
-	user, err := crearEmpresaConUsuario(h.db, req.Email, string(hash), req.NegocioNombre)
+	user, err := crearEmpresaConUsuario(c.Request.Context(), h.db, req.Email, string(hash), req.NegocioNombre)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "error creando cuenta"})
 		return
@@ -56,9 +56,9 @@ func (h *AdminHandler) CrearCuenta(c *gin.Context) {
 }
 
 type cuentaAdmin struct {
-	ID                uuid.UUID `json:"id"`
-	RazonSocial       string    `json:"razon_social"`
-	Titular           string    `json:"titular"`
+	ID          uuid.UUID `json:"id"`
+	RazonSocial string    `json:"razon_social"`
+	Titular     string    `json:"titular"`
 	// Tag de columna explícito: "CUIT" es un nombre 100% en mayúsculas, sin
 	// minúsculas que marquen límite de palabra — GORM infería mal el nombre de
 	// columna para el Scan de esta consulta Raw (el resto de los campos, con
@@ -80,7 +80,7 @@ type cuentaAdmin struct {
 // ListarCuentas maneja GET /api/admin/cuentas.
 func (h *AdminHandler) ListarCuentas(c *gin.Context) {
 	var cuentas []cuentaAdmin
-	if err := h.db.Raw(`
+	if err := h.db.WithContext(c.Request.Context()).Raw(`
 		SELECT e.id, e.razon_social, e.titular, e.cuit, e.punto_venta, e.arca_env,
 		       e.activo, e.direccion, e.telefono, e.condicion_iva, e.ing_brutos,
 		       e.inicio_actividades, e.defensa_consumidor,
@@ -126,7 +126,20 @@ func (h *AdminHandler) ActualizarCuenta(c *gin.Context) {
 		return
 	}
 
-	err = h.db.Transaction(func(tx *gorm.DB) error {
+	// Chequeo previo para devolver 409 con mensaje en vez de que el UNIQUE de
+	// users.email reviente como 500 genérico si el email ya es de otra cuenta.
+	// El índice sigue siendo la garantía real ante una carrera entre dos
+	// pedidos simultáneos; esto es solo para el caso común de un solo admin
+	// tipeando.
+	var enUso int64
+	h.db.WithContext(c.Request.Context()).Model(&models.User{}).
+		Where("email = ? AND empresa_id <> ?", req.Email, id).Count(&enUso)
+	if enUso > 0 {
+		c.JSON(http.StatusConflict, gin.H{"success": false, "error": "ese email ya está en uso por otra cuenta"})
+		return
+	}
+
+	err = h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&models.ConfigEmpresa{}).Where("id = ?", id).Updates(map[string]interface{}{
 			"razon_social":       req.RazonSocial,
 			"titular":            req.Titular,
@@ -170,7 +183,7 @@ func (h *AdminHandler) CambiarEstado(c *gin.Context) {
 		return
 	}
 
-	if err := h.db.Model(&models.ConfigEmpresa{}).Where("id = ?", id).
+	if err := h.db.WithContext(c.Request.Context()).Model(&models.ConfigEmpresa{}).Where("id = ?", id).
 		Update("activo", req.Activo).Error; err != nil {
 		internalError(c, err)
 		return
@@ -188,7 +201,7 @@ func (h *AdminHandler) EliminarCuenta(c *gin.Context) {
 		return
 	}
 
-	err = h.db.Transaction(func(tx *gorm.DB) error {
+	err = h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
 		// Al borrar ventas, venta_items y tareas_pendientes se van en cascada (FK
 		// ON DELETE CASCADE). Las demás tablas tienen empresa_id sin FK a
 		// config_empresa, así que se borran explícitamente antes que la empresa.
@@ -236,9 +249,15 @@ func (h *AdminHandler) ResetPassword(c *gin.Context) {
 		return
 	}
 
-	result := h.db.Model(&models.User{}).
+	// token_version += 1: si la cuenta tenía un JWT filtrado dando vueltas, un
+	// reset de contraseña por admin lo invalida igual que lo haría la propia
+	// usuaria cambiándola desde CambiarPassword.
+	result := h.db.WithContext(c.Request.Context()).Model(&models.User{}).
 		Where("email = ?", req.Email).
-		Update("password_hash", string(hash))
+		Updates(map[string]interface{}{
+			"password_hash": string(hash),
+			"token_version": gorm.Expr("token_version + 1"),
+		})
 	if result.Error != nil {
 		internalError(c, result.Error)
 		return

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -61,9 +62,9 @@ func getUserID(c *gin.Context) uuid.UUID {
 }
 
 // loadEmpresa carga la ConfigEmpresa desde la base de datos para el empresa_id dado.
-func loadEmpresa(db *gorm.DB, empresaID uuid.UUID) (models.ConfigEmpresa, error) {
+func loadEmpresa(ctx context.Context, db *gorm.DB, empresaID uuid.UUID) (models.ConfigEmpresa, error) {
 	var emp models.ConfigEmpresa
-	err := db.First(&emp, "id = ?", empresaID).Error
+	err := db.WithContext(ctx).First(&emp, "id = ?", empresaID).Error
 	return emp, err
 }
 

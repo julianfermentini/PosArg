@@ -38,8 +38,10 @@ type ventaPendienteCAE struct {
 func (h *PendientesHandler) Listar(c *gin.Context) {
 	empresaID := getEmpresaID(c)
 
+	ctx := c.Request.Context()
+
 	var tareas []models.TareaPendiente
-	if err := h.db.Where("empresa_id = ? AND tipo = ? AND estado IN ?", empresaID, models.TareaObtenerCAE,
+	if err := h.db.WithContext(ctx).Where("empresa_id = ? AND tipo = ? AND estado IN ?", empresaID, models.TareaObtenerCAE,
 		[]models.EstadoTarea{models.TareaEstadoPendiente, models.TareaEstadoError}).
 		Order("created_at ASC").
 		Find(&tareas).Error; err != nil {
@@ -57,12 +59,15 @@ func (h *PendientesHandler) Listar(c *gin.Context) {
 		ventaIDs[i] = t.VentaID
 	}
 	var ventas []models.Venta
-	if err := h.db.Preload("Items").Where("id IN ?", ventaIDs).Find(&ventas).Error; err != nil {
+	if err := h.db.WithContext(ctx).Preload("Items").Where("id IN ?", ventaIDs).Find(&ventas).Error; err != nil {
 		internalError(c, err)
 		return
 	}
 	var facturas []models.Factura
-	h.db.Where("venta_id IN ?", ventaIDs).Find(&facturas)
+	if err := h.db.WithContext(ctx).Where("venta_id IN ?", ventaIDs).Find(&facturas).Error; err != nil {
+		internalError(c, err)
+		return
+	}
 
 	ventaByID := make(map[uuid.UUID]models.Venta, len(ventas))
 	facturaByID := make(map[uuid.UUID]models.Factura, len(facturas))

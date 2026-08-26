@@ -58,13 +58,12 @@ func (h *SyncHandler) SincronizarVentas(c *gin.Context) {
 	}
 
 	empresaID := getEmpresaID(c)
-	empresa, err := loadEmpresa(h.db, empresaID)
+	ctx := c.Request.Context()
+	empresa, err := loadEmpresa(ctx, h.db, empresaID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "empresa no encontrada"})
 		return
 	}
-
-	ctx := c.Request.Context()
 
 	ventas := append([]VentaOffline(nil), req.Ventas...)
 	sort.Slice(ventas, func(i, j int) bool { return ventas[i].CreatedAt.Before(ventas[j].CreatedAt) })
@@ -99,7 +98,7 @@ func (h *SyncHandler) procesarOffline(ctx context.Context, v VentaOffline, empre
 	}
 
 	var existente models.Venta
-	yaExiste := h.db.Where("id = ? AND empresa_id = ?", ventaID, empresaID).First(&existente).Error == nil
+	yaExiste := h.db.WithContext(ctx).Where("id = ? AND empresa_id = ?", ventaID, empresaID).First(&existente).Error == nil
 
 	if yaExiste {
 		if existente.CAE != "" {
@@ -144,11 +143,11 @@ func (h *SyncHandler) procesarOffline(ctx context.Context, v VentaOffline, empre
 		return SyncResultado{ID: v.ID, Error: err.Error(), Success: false}
 	}
 
-	return h.solicitarCAEYResultado(ctx, models.Venta{ID: ventaID, Numero: numero})
+	return h.solicitarCAEYResultado(ctx, models.Venta{ID: ventaID, EmpresaID: empresaID, Numero: numero})
 }
 
 func (h *SyncHandler) solicitarCAEYResultado(ctx context.Context, venta models.Venta) SyncResultado {
-	cae, err := h.worker.obtenerCAE(ctx, venta.ID)
+	cae, err := h.worker.obtenerCAE(ctx, venta.ID, venta.EmpresaID)
 	if err != nil {
 		slog.Error("CAE sync", "id", venta.ID, "err", err)
 		return SyncResultado{ID: venta.ID.String(), Numero: venta.Numero, Error: "CAE: " + err.Error(), Success: false}

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"net/http"
 	"os"
 
 	"github.com/gin-gonic/gin"
@@ -50,13 +51,21 @@ func SetupRouter(db *gorm.DB, cfg *config.Config, worker *handlers.Worker) *gin.
 			adminGrp.DELETE("/cuentas/:id", admin.EliminarCuenta)
 		}
 
+		// /health chequea también la conexión a la base: sin esto, Railway (u otro
+		// balanceador) vería "ok" aunque Postgres esté caído, porque el handler no
+		// tocaba la DB para nada.
 		api.GET("/health", func(c *gin.Context) {
-			c.JSON(200, gin.H{"status": "ok"})
+			sqlDB, err := db.DB()
+			if err != nil || sqlDB.PingContext(c.Request.Context()) != nil {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"status": "error", "db": "down"})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"status": "ok"})
 		})
 
 		// Rutas protegidas
 		protected := api.Group("/")
-		protected.Use(middleware.AuthRequired(cfg.JWTSecret))
+		protected.Use(middleware.AuthRequired(cfg.JWTSecret, db))
 		{
 			protected.PUT("/auth/password", authLimiter, auth.CambiarPassword)
 

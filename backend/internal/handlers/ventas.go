@@ -24,12 +24,12 @@ func NuevoVentasHandler(db *gorm.DB, worker *Worker) *VentasHandler {
 }
 
 type CrearVentaRequest struct {
-	Tipo           models.TipoComprobante `json:"tipo" binding:"required,oneof=TICKET FACTURA"`
+	Tipo models.TipoComprobante `json:"tipo" binding:"required,oneof=TICKET FACTURA"`
 	// dive: sin esto validator no chequea los tags de cada ItemRequest.
-	Items          []models.ItemRequest   `json:"items" binding:"required,min=1,dive"`
-	MontoEfectivo  float64                `json:"monto_efectivo"`
-	MontoTarjeta   float64                `json:"monto_tarjeta"`
-	MontoBilletera float64                `json:"monto_billetera"`
+	Items          []models.ItemRequest `json:"items" binding:"required,min=1,dive"`
+	MontoEfectivo  float64              `json:"monto_efectivo"`
+	MontoTarjeta   float64              `json:"monto_tarjeta"`
+	MontoBilletera float64              `json:"monto_billetera"`
 }
 
 // Crear maneja POST /api/ventas
@@ -41,13 +41,12 @@ func (h *VentasHandler) Crear(c *gin.Context) {
 	}
 
 	empresaID := getEmpresaID(c)
-	empresa, err := loadEmpresa(h.db, empresaID)
+	ctx := c.Request.Context()
+	empresa, err := loadEmpresa(ctx, h.db, empresaID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "empresa no encontrada"})
 		return
 	}
-
-	ctx := c.Request.Context()
 
 	var ventaID uuid.UUID
 	var numero string
@@ -91,12 +90,12 @@ func (h *VentasHandler) Crear(c *gin.Context) {
 	}
 
 	var venta models.Venta
-	h.db.Preload("Items", func(db *gorm.DB) *gorm.DB {
+	h.db.WithContext(ctx).Preload("Items", func(db *gorm.DB) *gorm.DB {
 		return db.Order("orden ASC")
 	}).First(&venta, "id = ?", ventaID)
 	_, _, total := models.TotalesDeItems(venta.Items)
 
-	cae, caeErr := h.worker.obtenerCAE(ctx, ventaID)
+	cae, caeErr := h.worker.obtenerCAE(ctx, ventaID, empresaID)
 	go h.worker.procesarPendientes(context.Background())
 
 	data := gin.H{"id": ventaID, "numero": numero, "total": total}
@@ -125,7 +124,7 @@ func (h *VentasHandler) DiasConVentas(c *gin.Context) {
 	finMes := inicioMes.AddDate(0, 1, 0)
 
 	var fechas []string
-	h.db.Raw(
+	h.db.WithContext(c.Request.Context()).Raw(
 		`SELECT DISTINCT TO_CHAR(created_at AT TIME ZONE 'America/Argentina/Buenos_Aires', 'YYYY-MM-DD') AS fecha
 		 FROM ventas
 		 WHERE empresa_id = ? AND created_at >= ? AND created_at < ?
@@ -143,7 +142,7 @@ func (h *VentasHandler) Listar(c *gin.Context) {
 	empresaID := getEmpresaID(c)
 
 	var ventas []models.Venta
-	query := h.db.Where("empresa_id = ?", empresaID).
+	query := h.db.WithContext(c.Request.Context()).Where("empresa_id = ?", empresaID).
 		Preload("Items", func(db *gorm.DB) *gorm.DB {
 			return db.Order("orden ASC")
 		}).Order("created_at desc").Limit(100)
@@ -163,4 +162,3 @@ func (h *VentasHandler) Listar(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": ventas})
 }
-

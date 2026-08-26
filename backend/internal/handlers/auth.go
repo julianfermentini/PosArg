@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -17,6 +18,22 @@ type AuthHandler struct {
 	db         *gorm.DB
 	jwtSecret  string
 	inviteCode string // vacío = modo legacy (solo primer usuario)
+}
+
+// hashDummy es un hash bcrypt de una contraseña que nadie tipeó, calculado una
+// sola vez al arrancar. Login lo usa cuando el email no existe, para que
+// CompareHashAndPassword corra igual que en el camino real: sin esto, un
+// intento con email inexistente responde notoriamente más rápido que uno con
+// email válido y contraseña incorrecta (no hay bcrypt de por medio), lo que
+// deja medir por tiempo qué emails están registrados.
+var hashDummy = mustHashDummy()
+
+func mustHashDummy() []byte {
+	h, err := bcrypt.GenerateFromPassword([]byte("posarg-dummy-password-timing-safety"), bcrypt.DefaultCost)
+	if err != nil {
+		panic(err)
+	}
+	return h
 }
 
 func NuevoAuthHandler(db *gorm.DB, jwtSecret, inviteCode string) *AuthHandler {
@@ -52,7 +69,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	} else {
 		// Modo legacy: solo el primer usuario puede registrarse
 		var count int64
-		h.db.Model(&models.User{}).Count(&count)
+		h.db.WithContext(c.Request.Context()).Model(&models.User{}).Count(&count)
 		if count > 0 {
 			c.JSON(http.StatusForbidden, gin.H{"success": false, "error": "Ya existe una cuenta registrada"})
 			return
@@ -65,7 +82,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	user, err := crearEmpresaConUsuario(h.db, req.Email, string(hash), req.NegocioNombre)
+	user, err := crearEmpresaConUsuario(c.Request.Context(), h.db, req.Email, string(hash), req.NegocioNombre)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "error creando cuenta"})
 		return
@@ -96,7 +113,8 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 
 	var user models.User
-	if err := h.db.Where("email = ?", req.Email).First(&user).Error; err != nil {
+	if err := h.db.WithContext(c.Request.Context()).Where("email = ?", req.Email).First(&user).Error; err != nil {
+		bcrypt.CompareHashAndPassword(hashDummy, []byte(req.Password))
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": "Email o contraseña incorrectos"})
 		return
 	}
@@ -107,7 +125,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 
 	var activo bool
-	if err := h.db.Model(&models.ConfigEmpresa{}).
+	if err := h.db.WithContext(c.Request.Context()).Model(&models.ConfigEmpresa{}).
 		Select("activo").Where("id = ?", user.EmpresaID).Scan(&activo).Error; err != nil || !activo {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "error": "Cuenta suspendida. Contactá al administrador."})
 		return
@@ -144,7 +162,7 @@ func (h *AuthHandler) CambiarPassword(c *gin.Context) {
 	}
 
 	var user models.User
-	if err := h.db.First(&user, "id = ?", getUserID(c)).Error; err != nil {
+	if err := h.db.WithContext(c.Request.Context()).First(&user, "id = ?", getUserID(c)).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "Usuario no encontrado"})
 		return
 	}
@@ -160,18 +178,32 @@ func (h *AuthHandler) CambiarPassword(c *gin.Context) {
 		return
 	}
 
-	if err := h.db.Model(&user).Update("password_hash", string(hash)).Error; err != nil {
+	// token_version += 1 invalida cualquier JWT emitido antes de este cambio —
+	// incluido el de esta misma sesión, por eso reemitimos uno nuevo abajo en
+	// vez de dejar que este pedido termine deslogueando a quien acaba de
+	// cambiar su propia contraseña.
+	if err := h.db.WithContext(c.Request.Context()).Model(&user).Updates(map[string]interface{}{
+		"password_hash": string(hash),
+		"token_version": gorm.Expr("token_version + 1"),
+	}).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "no se pudo actualizar la contraseña"})
 		return
 	}
+	user.TokenVersion++
 
-	c.JSON(http.StatusOK, gin.H{"success": true})
+	token, err := generarToken(user, h.jwtSecret)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "error generando token"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"token": token}})
 }
 
 // HasUsers indica si hay usuarios y si el registro por invitación está habilitado.
 func (h *AuthHandler) HasUsers(c *gin.Context) {
 	var count int64
-	h.db.Model(&models.User{}).Count(&count)
+	h.db.WithContext(c.Request.Context()).Model(&models.User{}).Count(&count)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
@@ -183,9 +215,9 @@ func (h *AuthHandler) HasUsers(c *gin.Context) {
 
 // crearEmpresaConUsuario crea una ConfigEmpresa y su User asociado en una
 // transacción atómica. Es la única fuente de verdad para crear cuentas nuevas.
-func crearEmpresaConUsuario(db *gorm.DB, email, passwordHash, negocioNombre string) (models.User, error) {
+func crearEmpresaConUsuario(ctx context.Context, db *gorm.DB, email, passwordHash, negocioNombre string) (models.User, error) {
 	var user models.User
-	err := db.Transaction(func(tx *gorm.DB) error {
+	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		empresa := models.ConfigEmpresa{
 			ID:           uuid.New(),
 			RazonSocial:  negocioNombre,
@@ -213,6 +245,7 @@ func generarToken(user models.User, secret string) (string, error) {
 		"empresa_id":     user.EmpresaID.String(),
 		"email":          user.Email,
 		"negocio_nombre": user.NegocioNombre,
+		"tv":             user.TokenVersion,
 		"exp":            time.Now().Add(30 * 24 * time.Hour).Unix(),
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

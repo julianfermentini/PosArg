@@ -42,13 +42,12 @@ func (h *FacturasHandler) Crear(c *gin.Context) {
 	}
 
 	empresaID := getEmpresaID(c)
-	empresa, err := loadEmpresa(h.db, empresaID)
+	ctx := c.Request.Context()
+	empresa, err := loadEmpresa(ctx, h.db, empresaID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "empresa no encontrada"})
 		return
 	}
-
-	ctx := c.Request.Context()
 
 	var ventaID, facturaID uuid.UUID
 	var numero string
@@ -102,12 +101,12 @@ func (h *FacturasHandler) Crear(c *gin.Context) {
 	}
 
 	var venta models.Venta
-	h.db.Preload("Items", func(db *gorm.DB) *gorm.DB {
+	h.db.WithContext(ctx).Preload("Items", func(db *gorm.DB) *gorm.DB {
 		return db.Order("orden ASC")
 	}).First(&venta, "id = ?", ventaID)
 	_, _, total := models.TotalesDeItems(venta.Items)
 
-	cae, caeErr := h.worker.obtenerCAE(ctx, ventaID)
+	cae, caeErr := h.worker.obtenerCAE(ctx, ventaID, empresaID)
 	go h.worker.procesarPendientes(context.Background())
 
 	data := gin.H{"id": facturaID, "venta_id": ventaID, "numero": numero, "total": total, "email_enviado": false}
@@ -129,7 +128,7 @@ func (h *FacturasHandler) Listar(c *gin.Context) {
 	empresaID := getEmpresaID(c)
 
 	var facturas []models.Factura
-	if err := h.db.Where("empresa_id = ?", empresaID).
+	if err := h.db.WithContext(c.Request.Context()).Where("empresa_id = ?", empresaID).
 		Preload("Venta.Items", func(db *gorm.DB) *gorm.DB {
 			return db.Order("orden ASC")
 		}).Order("created_at desc").Limit(100).Find(&facturas).Error; err != nil {

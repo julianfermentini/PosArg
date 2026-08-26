@@ -31,7 +31,7 @@ func Load() *Config {
 	}
 
 	return &Config{
-		DatabaseURL:     mustGetEnv("DATABASE_URL"),
+		DatabaseURL:     mustGetEnvFailFast("DATABASE_URL"),
 		ResendAPIKey:    getEnv("RESEND_API_KEY", ""),
 		ResendFromEmail: getEnv("RESEND_FROM_EMAIL", "onboarding@resend.dev"),
 		SMTPFromName:    getEnv("SMTP_FROM_NAME", "PosArg"),
@@ -63,14 +63,6 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
-}
-
-func mustGetEnv(key string) string {
-	v := os.Getenv(key)
-	if v == "" {
-		slog.Warn("variable de entorno no configurada", "key", key)
-	}
-	return v
 }
 
 func mustGetEnvFailFast(key string) string {

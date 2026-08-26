@@ -63,17 +63,18 @@ func (h *ReportesHandler) CierreCaja(c *gin.Context) {
 
 	inicio, fin := rangoDelDia(fecha)
 	var resumen ResumenCierre
+	db := h.db.WithContext(c.Request.Context())
 
-	h.db.Model(&models.Venta{}).Where("empresa_id = ? AND created_at >= ? AND created_at < ?", empresaID, inicio, fin).Count(&resumen.TotalVentas)
-	h.db.Model(&models.Venta{}).Where("empresa_id = ? AND created_at >= ? AND created_at < ? AND tipo = ?", empresaID, inicio, fin, models.TipoTicket).Count(&resumen.TotalTickets)
-	h.db.Model(&models.Venta{}).Where("empresa_id = ? AND created_at >= ? AND created_at < ? AND tipo = ?", empresaID, inicio, fin, models.TipoFactura).Count(&resumen.TotalFacturas)
+	db.Model(&models.Venta{}).Where("empresa_id = ? AND created_at >= ? AND created_at < ?", empresaID, inicio, fin).Count(&resumen.TotalVentas)
+	db.Model(&models.Venta{}).Where("empresa_id = ? AND created_at >= ? AND created_at < ? AND tipo = ?", empresaID, inicio, fin, models.TipoTicket).Count(&resumen.TotalTickets)
+	db.Model(&models.Venta{}).Where("empresa_id = ? AND created_at >= ? AND created_at < ? AND tipo = ?", empresaID, inicio, fin, models.TipoFactura).Count(&resumen.TotalFacturas)
 
 	type montos struct {
 		MontoTotal float64
 		MontoIVA   float64
 	}
 	var m montos
-	h.db.Raw(`
+	db.Raw(`
 		SELECT
 			COALESCE(SUM(vi.total), 0) AS monto_total,
 			COALESCE(SUM(vi.iva),   0) AS monto_iva
@@ -90,7 +91,7 @@ func (h *ReportesHandler) CierreCaja(c *gin.Context) {
 		Billetera float64
 	}
 	var mp montosPago
-	h.db.Raw(`
+	db.Raw(`
 		SELECT
 			COALESCE(SUM(monto_efectivo),  0) AS efectivo,
 			COALESCE(SUM(monto_tarjeta),   0) AS tarjeta,
@@ -103,7 +104,7 @@ func (h *ReportesHandler) CierreCaja(c *gin.Context) {
 	resumen.PorMetodoPago.Billetera = mp.Billetera
 
 	var rangos []RangoComprobante
-	h.db.Raw(`
+	db.Raw(`
 		SELECT tipo, MIN(numero) AS primero, MAX(numero) AS ultimo
 		FROM ventas
 		WHERE empresa_id = ? AND created_at >= ? AND created_at < ?

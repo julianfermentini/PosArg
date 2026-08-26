@@ -20,7 +20,7 @@ func NuevoEmpresaHandler(db *gorm.DB) *EmpresaHandler {
 // Get devuelve la configuración de la empresa del usuario autenticado.
 func (h *EmpresaHandler) Get(c *gin.Context) {
 	empresaID := getEmpresaID(c)
-	emp, err := loadEmpresa(h.db, empresaID)
+	emp, err := loadEmpresa(c.Request.Context(), h.db, empresaID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "empresa no encontrada"})
 		return
@@ -49,7 +49,7 @@ func (h *EmpresaHandler) Update(c *gin.Context) {
 
 	empresaID := getEmpresaID(c)
 	var emp models.ConfigEmpresa
-	if err := h.db.First(&emp, "id = ?", empresaID).Error; err != nil {
+	if err := h.db.WithContext(c.Request.Context()).First(&emp, "id = ?", empresaID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "empresa no encontrada"})
 		return
 	}
@@ -63,7 +63,7 @@ func (h *EmpresaHandler) Update(c *gin.Context) {
 	emp.InicioActividades = req.InicioActividades
 	emp.DefensaConsumidor = req.DefensaConsumidor
 
-	if err := h.db.Save(&emp).Error; err != nil {
+	if err := h.db.WithContext(c.Request.Context()).Save(&emp).Error; err != nil {
 		internalError(c, err)
 		return
 	}

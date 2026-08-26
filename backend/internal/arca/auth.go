@@ -3,6 +3,7 @@ package arca
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
@@ -80,7 +81,7 @@ func getCacheForCUIT(cuit int64) *tokenCache {
 }
 
 const mockToken = "MOCK_TOKEN"
-const mockSign  = "MOCK_SIGN"
+const mockSign = "MOCK_SIGN"
 
 // EsMockMode devuelve true si los certificados no están configurados y el entorno es testing.
 func EsMockMode(certPEM, keyPEM, env string) bool {
@@ -161,6 +162,22 @@ func buildTRA() ([]byte, error) {
 	return xml.MarshalIndent(tra, "", "  ")
 }
 
+// parseRSAPrivateKey acepta tanto PKCS1 ("BEGIN RSA PRIVATE KEY", lo típico
+// cuando el cert se generó con openssl genrsa, el caso más común con AFIP)
+// como PKCS8 ("BEGIN PRIVATE KEY", lo que emiten otras herramientas). Sin este
+// fallback, una empresa cuyo certificado venga en PKCS8 no podía autenticarse
+// nunca contra WSAA.
+func parseRSAPrivateKey(der []byte) (crypto.PrivateKey, error) {
+	if key, err := x509.ParsePKCS1PrivateKey(der); err == nil {
+		return key, nil
+	}
+	key, err := x509.ParsePKCS8PrivateKey(der)
+	if err != nil {
+		return nil, fmt.Errorf("no es una clave RSA en formato PKCS1 ni PKCS8: %w", err)
+	}
+	return key, nil
+}
+
 // signTRA firma el TRA usando el contenido PEM de cert y clave privada directamente,
 // sin leer archivos del sistema — necesario para entornos PaaS (Railway) y multi-tenant.
 func signTRA(tra []byte, certPEM, keyPEM string) (string, error) {
@@ -177,7 +194,7 @@ func signTRA(tra []byte, certPEM, keyPEM string) (string, error) {
 	if keyBlock == nil {
 		return "", fmt.Errorf("clave privada PEM inválida")
 	}
-	key, err := x509.ParsePKCS1PrivateKey(keyBlock.Bytes)
+	key, err := parseRSAPrivateKey(keyBlock.Bytes)
 	if err != nil {
 		return "", fmt.Errorf("parsear clave privada: %w", err)
 	}

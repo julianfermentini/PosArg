@@ -24,7 +24,11 @@ func (h *RotuloHandler) List(c *gin.Context) {
 	empresaID := getEmpresaID(c)
 
 	var rotulos []models.Rotulo
-	h.db.Where("empresa_id = ?", empresaID).Order("nombre asc").Find(&rotulos)
+	if err := h.db.WithContext(c.Request.Context()).
+		Where("empresa_id = ?", empresaID).Order("nombre asc").Find(&rotulos).Error; err != nil {
+		internalError(c, err)
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": rotulos})
 }
 
@@ -62,7 +66,7 @@ func (h *RotuloHandler) Guardar(c *gin.Context) {
 	}
 	empresaID := getEmpresaID(c)
 	r := models.Rotulo{ID: uuid.New(), EmpresaID: empresaID, Nombre: req.Nombre, Precio: req.Precio}
-	if err := h.db.Clauses(
+	if err := h.db.WithContext(c.Request.Context()).Clauses(
 		clause.OnConflict{
 			Columns:   []clause.Column{{Name: "empresa_id"}, {Name: "nombre"}},
 			DoUpdates: clause.AssignmentColumns([]string{"precio"}),
@@ -93,7 +97,7 @@ func (h *RotuloHandler) Actualizar(c *gin.Context) {
 	empresaID := getEmpresaID(c)
 
 	var r models.Rotulo
-	if err := h.db.First(&r, "id = ? AND empresa_id = ?", id, empresaID).Error; err != nil {
+	if err := h.db.WithContext(c.Request.Context()).First(&r, "id = ? AND empresa_id = ?", id, empresaID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "rótulo no encontrado"})
 		return
 	}
@@ -103,7 +107,7 @@ func (h *RotuloHandler) Actualizar(c *gin.Context) {
 	// que sirva en vez de un 500; el índice sigue siendo la garantía real si
 	// dos pedidos simultáneos pasaran este chequeo a la vez.
 	var enUso int64
-	h.db.Model(&models.Rotulo{}).
+	h.db.WithContext(c.Request.Context()).Model(&models.Rotulo{}).
 		Where("empresa_id = ? AND nombre = ? AND id <> ?", empresaID, req.Nombre, id).
 		Count(&enUso)
 	if enUso > 0 {
@@ -113,7 +117,7 @@ func (h *RotuloHandler) Actualizar(c *gin.Context) {
 
 	r.Nombre = req.Nombre
 	r.Precio = req.Precio
-	if err := h.db.Save(&r).Error; err != nil {
+	if err := h.db.WithContext(c.Request.Context()).Save(&r).Error; err != nil {
 		internalError(c, err)
 		return
 	}
@@ -127,6 +131,10 @@ func (h *RotuloHandler) Delete(c *gin.Context) {
 		return
 	}
 	empresaID := getEmpresaID(c)
-	h.db.Delete(&models.Rotulo{}, "id = ? AND empresa_id = ?", id, empresaID)
+	if err := h.db.WithContext(c.Request.Context()).
+		Delete(&models.Rotulo{}, "id = ? AND empresa_id = ?", id, empresaID).Error; err != nil {
+		internalError(c, err)
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }

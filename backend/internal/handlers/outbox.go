@@ -72,12 +72,21 @@ func solicitarCAE(ctx context.Context, db *gorm.DB, empresa models.ConfigEmpresa
 
 // obtenerCAE consigue el CAE de una venta ya persistida, cargando la empresa
 // desde la base para saber qué CUIT/certs usar. Es idempotente.
-func (w *Worker) obtenerCAE(ctx context.Context, ventaID uuid.UUID) (*arca.ResultadoCAE, error) {
-	w.caeMu.Lock()
-	defer w.caeMu.Unlock()
+//
+// empresaID lo pasa quien llama (todos ya lo tienen a mano: sale del JWT en
+// los handlers, o de TareaPendiente.EmpresaID en el worker) en vez de que esta
+// función lo vuelva a buscar en la base — es la misma empresa que la venta ya
+// tiene asignada de forma inmutable desde que se creó, así que no hay nada que
+// resolver. Se usa para elegir el lock por empresa ANTES de leer la venta: dos
+// llamadas concurrentes para la misma venta tienen que serializarse en la
+// misma empresa, si no ambas podrían leer CAE="" antes de que la primera
+// termine de persistir el suyo, y pedir un segundo CAE de más.
+func (w *Worker) obtenerCAE(ctx context.Context, ventaID, empresaID uuid.UUID) (*arca.ResultadoCAE, error) {
+	unlock := w.caeLocks.Lock(empresaID)
+	defer unlock()
 
 	var venta models.Venta
-	if err := w.db.Preload("Items", func(d *gorm.DB) *gorm.DB {
+	if err := w.db.WithContext(ctx).Preload("Items", func(d *gorm.DB) *gorm.DB {
 		return d.Order("orden ASC")
 	}).First(&venta, "id = ?", ventaID).Error; err != nil {
 		return nil, fmt.Errorf("cargar venta: %w", err)
@@ -97,7 +106,7 @@ func (w *Worker) obtenerCAE(ctx context.Context, ventaID uuid.UUID) (*arca.Resul
 		return nil, errCAEBloqueadaPorOrden
 	}
 
-	empresa, err := loadEmpresa(w.db, venta.EmpresaID)
+	empresa, err := loadEmpresa(ctx, w.db, venta.EmpresaID)
 	if err != nil {
 		return nil, fmt.Errorf("cargar empresa: %w", err)
 	}
@@ -106,7 +115,7 @@ func (w *Worker) obtenerCAE(ctx context.Context, ventaID uuid.UUID) (*arca.Resul
 	esFactura := venta.Tipo == models.TipoFactura
 	if esFactura {
 		var factura models.Factura
-		if err := w.db.First(&factura, "venta_id = ?", ventaID).Error; err != nil {
+		if err := w.db.WithContext(ctx).First(&factura, "venta_id = ?", ventaID).Error; err != nil {
 			return nil, fmt.Errorf("cargar factura: %w", err)
 		}
 		if docNro = parseCUIT(factura.CUITCliente); docNro > 0 {
@@ -124,7 +133,7 @@ func (w *Worker) obtenerCAE(ctx context.Context, ventaID uuid.UUID) (*arca.Resul
 
 	numeroFiscal := fmt.Sprintf("%03d-%08d", empresa.PuntoVenta, cae.NroCmp)
 
-	err = w.db.Transaction(func(tx *gorm.DB) error {
+	err = w.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&models.Venta{}).Where("id = ?", ventaID).Updates(map[string]interface{}{
 			"numero_fiscal": numeroFiscal,
 			"cae":           cae.CAE,
@@ -225,20 +234,20 @@ func (w *Worker) CorregirYReintentarFactura(ventaID, empresaID uuid.UUID, razonS
 
 // enviarFacturaPorEmail genera el PDF y lo envía. Carga venta, factura y empresa
 // frescos desde la base para poder correr como tarea diferida.
-func enviarFacturaPorEmail(db *gorm.DB, emailCli *email.Cliente, ventaID uuid.UUID) error {
+func enviarFacturaPorEmail(ctx context.Context, db *gorm.DB, emailCli *email.Cliente, ventaID uuid.UUID) error {
 	var venta models.Venta
-	if err := db.Preload("Items", func(d *gorm.DB) *gorm.DB {
+	if err := db.WithContext(ctx).Preload("Items", func(d *gorm.DB) *gorm.DB {
 		return d.Order("orden ASC")
 	}).First(&venta, "id = ?", ventaID).Error; err != nil {
 		return fmt.Errorf("cargar venta: %w", err)
 	}
 
 	var factura models.Factura
-	if err := db.First(&factura, "venta_id = ?", ventaID).Error; err != nil {
+	if err := db.WithContext(ctx).First(&factura, "venta_id = ?", ventaID).Error; err != nil {
 		return fmt.Errorf("cargar factura: %w", err)
 	}
 
-	empresa, err := loadEmpresa(db, venta.EmpresaID)
+	empresa, err := loadEmpresa(ctx, db, venta.EmpresaID)
 	if err != nil {
 		return fmt.Errorf("cargar empresa: %w", err)
 	}
@@ -299,7 +308,7 @@ func enviarFacturaPorEmail(db *gorm.DB, emailCli *email.Cliente, ventaID uuid.UU
 		return fmt.Errorf("generar pdf: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	emailCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
 	datosEmail := email.DatosFactura{
@@ -311,19 +320,21 @@ func enviarFacturaPorEmail(db *gorm.DB, emailCli *email.Cliente, ventaID uuid.UU
 		PDFBytes:      pdfBytes,
 		NegocioNombre: empresa.RazonSocial,
 	}
-	if err := emailCli.EnviarFactura(ctx, factura.EmailCliente, datosEmail); err != nil {
+	if err := emailCli.EnviarFactura(emailCtx, factura.EmailCliente, datosEmail); err != nil {
 		return fmt.Errorf("enviar email: %w", err)
 	}
 
-	return db.Model(&factura).Update("email_enviado", true).Error
+	return db.WithContext(ctx).Model(&factura).Update("email_enviado", true).Error
 }
 
 // Worker procesa las tareas pendientes (CAE, email) en background.
 type Worker struct {
-	db           *gorm.DB
-	emailCli     *email.Cliente
-	alertEmail   string
-	caeMu        sync.Mutex
+	db         *gorm.DB
+	emailCli   *email.Cliente
+	alertEmail string
+	// caeLocks serializa las llamadas a ARCA por empresa (ver keyedMutex) — así
+	// una empresa con ARCA lento o caído no frena el CAE de las demás.
+	caeLocks     keyedMutex
 	sweepMu      sync.Mutex
 	ultimaAlerta time.Time // protegido por sweepMu: chequearAlerta corre siempre dentro del sweep
 }
@@ -407,13 +418,13 @@ func (w *Worker) chequearAlerta(ctx context.Context) {
 	w.ultimaAlerta = time.Now()
 
 	masVieja := trabadas[0]
-	empresa, _ := loadEmpresa(w.db, masVieja.EmpresaID)
+	empresa, _ := loadEmpresa(ctx, w.db, masVieja.EmpresaID)
 	var venta models.Venta
-	w.db.First(&venta, "id = ?", masVieja.VentaID)
+	w.db.WithContext(ctx).First(&venta, "id = ?", masVieja.VentaID)
 
 	asunto, cuerpo := mensajeAlertaCAE(len(trabadas), venta, empresa.RazonSocial, masVieja)
 
-	alertCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	alertCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	if err := w.emailCli.EnviarAlerta(alertCtx, w.alertEmail, asunto, cuerpo); err != nil {
 		slog.Error("outbox: no se pudo enviar la alerta de CAE trabado", "err", err)
@@ -473,9 +484,9 @@ func (w *Worker) ejecutar(ctx context.Context, t models.TareaPendiente) {
 	var err error
 	switch t.Tipo {
 	case models.TareaObtenerCAE:
-		_, err = w.obtenerCAE(ctx, t.VentaID)
+		_, err = w.obtenerCAE(ctx, t.VentaID, t.EmpresaID)
 	case models.TareaEmailFactura:
-		err = enviarFacturaPorEmail(w.db, w.emailCli, t.VentaID)
+		err = enviarFacturaPorEmail(ctx, w.db, w.emailCli, t.VentaID)
 	default:
 		err = fmt.Errorf("tipo de tarea desconocido: %s", t.Tipo)
 	}
