@@ -276,7 +276,7 @@ export default function ReportePage() {
     const fechaFmt = fechaSel
       ? format(new Date(fechaSel + 'T00:00:00'), 'dd/MM/yyyy')
       : format(hoy, 'dd/MM/yyyy')
-    await printer.imprimirCierre({
+    const error = await printer.imprimirCierre({
       negocioNombre: empresa?.razon_social ?? '',
       cuit:          empresa?.cuit ?? '',
       fecha:         fechaFmt,
@@ -291,6 +291,8 @@ export default function ReportePage() {
       billetera:     resumen.por_metodo_pago.billetera,
       rangoComprobantes: resumen.rango_comprobantes,
     })
+    // Sin esto el ✓ verde salia igual aunque la impresion hubiera fallado.
+    if (error) return
     setCierreOk(true)
     setTimeout(() => setCierreOk(false), 2500)
   }

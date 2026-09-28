@@ -59,7 +59,10 @@ export default function VentaPage() {
     }
   }, [store])
 
-  const mostrarExito = (resultado: EmitirVentaResult) => {
+  // Deja la pantalla lista para la proxima venta. La comparten el ticket fiscal
+  // y el no fiscal, asi que agregar un campo al formulario no puede quedar
+  // reseteado en un camino y olvidado en el otro.
+  const limpiarPantalla = () => {
     setPaso('descripcion')
     setNeedsFactura(false)
     setDividirPago(false)
@@ -67,6 +70,10 @@ export default function VentaPage() {
     setCuit('')
     setEmailCliente('')
     setErrorMsg('')
+  }
+
+  const mostrarExito = (resultado: EmitirVentaResult) => {
+    limpiarPantalla()
     setEmitido(resultado)
   }
 
@@ -94,11 +101,7 @@ export default function VentaPage() {
   const empresaBase = buildEmpresaBase(empresa)
 
   const handleImprimirNoFiscal = async () => {
-    // Sin impresora la accion del store no hace nada Y no deja error, asi que
-    // sin este guard el carrito se limpiaria sin haber impreso el ticket.
-    if (!printer.conectado) return
-    printer.clearError()
-    await printer.imprimirNoFiscal({
+    const error = await printer.imprimirNoFiscal({
       ...empresaBase,
       items: itemsParaTicket(store.carrito),
       subtotal:       neto,
@@ -110,12 +113,11 @@ export default function VentaPage() {
       montoTarjeta:   store.montoTarjeta,
       montoBilletera: store.montoBilletera,
     })
-    // El printer store se traga el error en el estado en vez de re-lanzarlo, asi
-    // que hay que leerlo: si la impresion fallo se deja el carrito intacto, para
-    // no perder la venta sin haber entregado el ticket.
-    if (usePrinterStore.getState().error) return
+    // Si no se imprimio (impresora caida o desconectada) se deja el carrito
+    // intacto, para no perder la venta sin haber entregado el ticket.
+    if (error) return
     store.limpiarCarrito()
-    setDividirPago(false)
+    limpiarPantalla()
   }
 
   const mtab = (t: typeof mobileTab) =>

@@ -37,12 +37,8 @@ export default function RotuloPage() {
 
   const imprimir = async () => {
     if (!puedeImprimir) return
-    printer.clearError()
-    await printer.imprimirRotulo({ nombre: nombreLimpio, precio: precioNum, cantidad })
-    // Las acciones del store se tragan el error en el estado en vez de
-    // re-lanzarlo, así que hay que leerlo para no cantar un ✓ sobre un fallo.
-    if (usePrinterStore.getState().error) return
-    mostrarAviso('Enviado a la impresora')
+    const error = await printer.imprimirRotulo({ nombre: nombreLimpio, precio: precioNum, cantidad })
+    mostrarAviso(error ?? 'Enviado a la impresora', !error)
   }
 
   const guardarRotulo = async () => {
