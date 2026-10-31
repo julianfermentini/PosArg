@@ -1,4 +1,4 @@
-import axios from 'axios'
+import axios, { type AxiosError } from 'axios'
 import type { ApiResponse, Venta, Factura, ResumenCierre, VentaOffline, ItemRequest } from '../types'
 
 const api = axios.create({
@@ -16,6 +16,23 @@ api.interceptors.request.use((config) => {
     } catch {}
   }
   return config
+})
+
+const SESION_VENCIDA = 'Tu sesión venció. Tocá Salir y volvé a iniciar sesión.'
+
+// Sin esto, un JWT vencido se ve como "Request failed with status code 401".
+// Se filtra por el texto y no solo por el status porque el middleware de auth
+// es el único que responde "Token ..."; los demás 401 (login, contraseña actual
+// incorrecta, X-Admin-Secret) traen su propio mensaje y no son de sesión.
+// Se pisan los dos campos: unas pantallas muestran error.message y otras
+// response.data.error (ver extractError).
+api.interceptors.response.use(undefined, (error: AxiosError<ApiResponse<unknown>>) => {
+  const data = error.response?.data
+  if (error.response?.status === 401 && data?.error?.startsWith('Token')) {
+    error.message = SESION_VENCIDA
+    data.error = SESION_VENCIDA
+  }
+  return Promise.reject(error)
 })
 
 export const authApi = {
